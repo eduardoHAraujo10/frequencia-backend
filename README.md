@@ -1,6 +1,6 @@
 ## Projeto de frequencia de alunos
 
-## instlar dependencias 
+## instalar dependencias 
 
 ```sh
 composer install
