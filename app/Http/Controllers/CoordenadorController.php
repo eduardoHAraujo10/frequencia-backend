@@ -9,6 +9,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use App\Models\AlertaEsquecimento;
+use Illuminate\Support\Facades\Auth;
 
 class CoordenadorController extends Controller
 {
@@ -287,5 +289,66 @@ class CoordenadorController extends Controller
         }
 
         return round($totalMinutos / 60, 2);
+    }
+
+    public function listarAlertasEsquecimento(Request $request)
+    {
+        try {
+            $alertas = AlertaEsquecimento::with('aluno')
+                ->orderBy('created_at', 'desc')
+                ->paginate(10);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'alertas' => $alertas->items(),
+                    'total' => $alertas->total(),
+                    'por_pagina' => $alertas->perPage(),
+                    'pagina_atual' => $alertas->currentPage(),
+                    'ultima_pagina' => $alertas->lastPage()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao listar alertas de esquecimento'
+            ], 500);
+        }
+    }
+
+    public function responderAlertaEsquecimento(Request $request, $id)
+    {
+        try {
+            $request->validate([
+                'status' => 'required|in:aprovado,rejeitado',
+                'observacao_coordenador' => 'nullable|string'
+            ]);
+
+            $alerta = AlertaEsquecimento::findOrFail($id);
+            
+            if ($alerta->status !== 'pendente') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Este alerta já foi respondido'
+                ], 400);
+            }
+
+            $alerta->status = $request->status;
+            $alerta->observacao_coordenador = $request->observacao_coordenador;
+            $alerta->coordenador_id = Auth::id();
+            $alerta->data_aprovacao = now();
+            $alerta->save();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Alerta respondido com sucesso',
+                'data' => $alerta
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao responder alerta de esquecimento'
+            ], 500);
+        }
     }
 }

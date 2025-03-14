@@ -5,6 +5,7 @@ use App\Http\Controllers\UserController;
 use App\Http\Controllers\RegistroController;
 use App\Http\Controllers\GerenciadorController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\CoordenadorController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -38,6 +39,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/registros/horas', [RegistroController::class, 'horasTrabalhadas']);
         Route::get('/registros/historico', [RegistroController::class, 'historico']);
         Route::get('/registros/resumo', [RegistroController::class, 'resumo']);
+        Route::post('/registros/ajuste', [RegistroController::class, 'solicitarAjuste']);
         Route::put('/registros/{id}', [GerenciadorController::class, 'editarRegistro']);
         Route::delete('/registros/{id}', [GerenciadorController::class, 'excluirRegistro']);
 
@@ -56,5 +58,16 @@ Route::prefix('v1')->group(function () {
             Route::get('/dashboard', [DashboardController::class, 'estatisticas']);
             Route::get('/dashboard/periodo', [DashboardController::class, 'estatisticasPeriodo']);
         });
+
+        // Rotas de alerta de esquecimento
+        Route::post('/registros/alerta-esquecimento', [RegistroController::class, 'criarAlertaEsquecimento']);
+        Route::get('/registros/alerta-esquecimento', [RegistroController::class, 'listarAlertasEsquecimento']);
+    });
+
+    // Rotas do coordenador
+    Route::middleware(['auth:sanctum', \App\Http\Middleware\CoordenadorMiddleware::class])->group(function () {
+        // Alertas de esquecimento
+        Route::get('/coordenador/alertas-esquecimento', [CoordenadorController::class, 'listarAlertasEsquecimento']);
+        Route::post('/coordenador/alertas-esquecimento/{id}/responder', [CoordenadorController::class, 'responderAlertaEsquecimento']);
     });
 });

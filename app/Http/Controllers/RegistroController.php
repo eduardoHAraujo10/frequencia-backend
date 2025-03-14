@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Registro;
 use App\Models\User;
+use App\Models\AlertaEsquecimento;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -45,26 +46,25 @@ class RegistroController extends Controller
             return $this->unauthorizedResponse('Seu acesso está bloqueado');
         }
 
-        // Verifica se já existe registro do mesmo tipo hoje
-        $registroExistente = Registro::where('user_id', $user->id)
+        // Verifica o último registro do usuário
+        $ultimoRegistro = Registro::where('user_id', $user->id)
             ->whereDate('horario', Carbon::today())
-            ->where('tipo', $request->tipo)
-            ->exists();
+            ->orderBy('horario', 'desc')
+            ->first();
 
-        if ($registroExistente) {
-            return $this->errorResponse('Você já registrou ' . $request->tipo . ' hoje');
+        // Se for entrada e o último registro foi entrada, não permite
+        if ($request->tipo === 'entrada' && $ultimoRegistro && $ultimoRegistro->tipo === 'entrada') {
+            return $this->errorResponse('Você precisa registrar saída antes de registrar outra entrada');
         }
 
-        // Se for saída, verifica se tem entrada
-        if ($request->tipo === 'saida') {
-            $temEntrada = Registro::where('user_id', $user->id)
-                ->whereDate('horario', Carbon::today())
-                ->where('tipo', 'entrada')
-                ->exists();
+        // Se for saída e o último registro foi saída, não permite
+        if ($request->tipo === 'saida' && $ultimoRegistro && $ultimoRegistro->tipo === 'saida') {
+            return $this->errorResponse('Você precisa registrar entrada antes de registrar outra saída');
+        }
 
-            if (!$temEntrada) {
-                return $this->errorResponse('Você precisa registrar entrada antes de registrar saída');
-            }
+        // Se for a primeira saída do dia, verifica se tem entrada
+        if ($request->tipo === 'saida' && !$ultimoRegistro) {
+            return $this->errorResponse('Você precisa registrar entrada antes de registrar saída');
         }
 
         $registro = new Registro();
@@ -320,5 +320,163 @@ class RegistroController extends Controller
                 })
             ]
         ]);
+    }
+
+    /**
+     * Solicita ajuste de um registro
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function solicitarAjuste(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'registro_id' => 'required|exists:registros,id',
+            'novo_horario' => 'required|date',
+            'justificativa' => 'required|string|min:10'
+        ], [
+            'registro_id.required' => 'O ID do registro é obrigatório',
+            'registro_id.exists' => 'Registro não encontrado',
+            'novo_horario.required' => 'O novo horário é obrigatório',
+            'novo_horario.date' => 'O novo horário deve ser uma data válida',
+            'justificativa.required' => 'A justificativa é obrigatória',
+            'justificativa.min' => 'A justificativa deve ter pelo menos 10 caracteres'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro de validação',
+                'errors' => $validator->errors()->toArray()
+            ], 422);
+        }
+
+        $user = $request->user();
+        $registro = Registro::find($request->registro_id);
+
+        // Verifica se o registro pertence ao usuário
+        if ($registro->user_id !== $user->id) {
+            return $this->unauthorizedResponse('Você não tem permissão para ajustar este registro');
+        }
+
+        // Cria a solicitação de ajuste
+        DB::table('solicitacoes_ajuste')->insert([
+            'registro_id' => $registro->id,
+            'user_id' => $user->id,
+            'horario_atual' => $registro->horario,
+            'horario_solicitado' => $request->novo_horario,
+            'justificativa' => $request->justificativa,
+            'status' => 'pendente',
+            'created_at' => now(),
+            'updated_at' => now()
+        ]);
+
+        // Notifica o coordenador (implementar depois)
+        // TODO: Implementar notificação
+
+        return $this->successResponse(null, 'Solicitação de ajuste enviada com sucesso');
+    }
+
+    /**
+     * Cria um alerta de esquecimento de registro
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function criarAlertaEsquecimento(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'data' => [
+                'required',
+                'date',
+                'after_or_equal:' . now()->subDays(7)->format('Y-m-d'),
+                'before_or_equal:' . now()->addDays(1)->format('Y-m-d'),
+            ],
+            'horario_previsto' => [
+                'required',
+                'date_format:H:i',
+                function ($attribute, $value, $fail) use ($request) {
+                    if (!$request->data) return;
+                    
+                    $dataHora = Carbon::createFromFormat('Y-m-d H:i', $request->data . ' ' . $value);
+                    
+                    if ($dataHora->isFuture() && $dataHora->diffInDays(now()) > 1) {
+                        $fail('O horário não pode ser mais de 1 dia no futuro.');
+                    }
+                    
+                    if ($dataHora->isPast() && $dataHora->diffInDays(now()) > 7) {
+                        $fail('O horário não pode ser mais de 7 dias no passado.');
+                    }
+                }
+            ],
+            'tipo' => 'required|in:entrada,saida',
+            'justificativa' => 'required|string|min:10'
+        ], [
+            'data.required' => 'A data é obrigatória',
+            'data.date' => 'A data deve ser válida',
+            'data.after_or_equal' => 'A data não pode ser mais de 7 dias no passado',
+            'data.before_or_equal' => 'A data não pode ser mais de 1 dia no futuro',
+            'horario_previsto.required' => 'O horário é obrigatório',
+            'horario_previsto.date_format' => 'O horário deve estar no formato HH:mm',
+            'tipo.required' => 'O tipo é obrigatório',
+            'tipo.in' => 'O tipo deve ser entrada ou saída',
+            'justificativa.required' => 'A justificativa é obrigatória',
+            'justificativa.min' => 'A justificativa deve ter pelo menos 10 caracteres'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro de validação',
+                'errors' => $validator->errors()->toArray()
+            ], 422);
+        }
+
+        $user = $request->user();
+
+        if ($user->tipo !== 'aluno') {
+            return $this->unauthorizedResponse('Apenas alunos podem criar alertas de esquecimento');
+        }
+
+        // Verifica se já existe alerta para o mesmo dia e tipo
+        $alertaExistente = AlertaEsquecimento::where('user_id', $user->id)
+            ->where('data', $request->data)
+            ->where('tipo', $request->tipo)
+            ->exists();
+
+        if ($alertaExistente) {
+            return $this->errorResponse('Já existe um alerta para esta data e tipo de registro');
+        }
+
+        $alerta = new AlertaEsquecimento();
+        $alerta->user_id = $user->id;
+        $alerta->data = $request->data;
+        $alerta->horario_previsto = Carbon::parse($request->data . ' ' . $request->horario_previsto);
+        $alerta->tipo = $request->tipo;
+        $alerta->justificativa = $request->justificativa;
+        $alerta->save();
+
+        return $this->successResponse($alerta, 'Alerta de esquecimento criado com sucesso');
+    }
+
+    /**
+     * Lista os alertas de esquecimento do aluno
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function listarAlertasEsquecimento(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->tipo !== 'aluno') {
+            return $this->unauthorizedResponse('Acesso não autorizado');
+        }
+
+        $alertas = AlertaEsquecimento::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return $this->successResponse($alertas);
     }
 }
