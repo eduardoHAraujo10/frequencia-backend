@@ -6,6 +6,7 @@ use App\Http\Controllers\RegistroController;
 use App\Http\Controllers\GerenciadorController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\CoordenadorController;
+use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -28,6 +29,11 @@ Route::prefix('v1')->group(function () {
         // Usuário
         Route::get('/usuarios/perfil', [UserController::class, 'perfil']);
         Route::put('/usuarios/perfil', [UserController::class, 'atualizar']);
+        Route::post('/usuarios/avatar', [ProfileController::class, 'updateAvatar']);
+
+        // Rotas de perfil
+        Route::get('/profile', [ProfileController::class, 'show']);
+        Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar']);
 
         // Aluno
         Route::get('/aluno/info', [RegistroController::class, 'info']);

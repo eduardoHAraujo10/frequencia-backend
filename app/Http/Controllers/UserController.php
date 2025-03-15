@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use App\Models\Registro;
+use Illuminate\Support\Facades\Storage;
 
 class UserController extends Controller
 {
@@ -75,7 +76,8 @@ class UserController extends Controller
                     'ativo' => $user->ativo,
                     'ultimo_acesso' => $user->ultimo_acesso,
                     'created_at' => $user->created_at,
-                    'updated_at' => $user->updated_at
+                    'updated_at' => $user->updated_at,
+                    'avatar_url' => $user->avatar ? Storage::url($user->avatar) : null
                 ],
                 ...$dadosAdicionais
             ]

@@ -22,17 +22,23 @@ class DashboardController extends Controller
         $data = $request->input('data', $hoje->format('Y-m-d'));
 
         // Estatísticas gerais
-        $totalAlunos = User::where('tipo', 0)->where('ativo', true)->count();
-        $alunosPresentes = User::where('tipo', 0)->whereHas('registros', function ($query) use ($data) {
-            $query->whereDate('horario', $data);
-        })->count();
+        $totalAlunos = User::where('tipo', 'aluno')->where('ativo', true)->count();
+        $alunosPresentes = User::where('tipo', 'aluno')
+            ->where('ativo', true)
+            ->whereHas('registros', function ($query) use ($data) {
+                $query->whereDate('horario', $data)
+                      ->where('tipo', 'entrada');
+            })->count();
 
         $ausentes = $totalAlunos - $alunosPresentes;
         $porcentagemPresenca = $totalAlunos > 0 ? round(($alunosPresentes / $totalAlunos) * 100, 2) : 0;
 
         // Estatísticas de horários
         $horariosRegistros = Registro::whereDate('horario', $data)
-            ->select(DB::raw('HOUR(horario) as hora'), DB::raw('COUNT(*) as total'))
+            ->select(
+                DB::raw('HOUR(horario) as hora'), 
+                DB::raw('COUNT(DISTINCT user_id) as total')
+            )
             ->groupBy('hora')
             ->orderBy('hora')
             ->get();
@@ -119,7 +125,7 @@ class DashboardController extends Controller
             ->join('users', 'registros.user_id', '=', 'users.id')
             ->whereDate('registros.horario', '>=', $dataInicio)
             ->whereDate('registros.horario', '<=', $dataFim)
-            ->where('users.tipo', 0)
+            ->where('users.tipo', 'aluno')
             ->where('users.ativo', true)
             ->select(
                 DB::raw('DATE(horario) as data'),
@@ -132,24 +138,37 @@ class DashboardController extends Controller
         // Total de horas registradas no período
         $horasTotais = DB::table('registros')
             ->join('users', 'registros.user_id', '=', 'users.id')
-            ->where('users.tipo', 0)
+            ->where('users.tipo', 'aluno')
             ->whereDate('horario', '>=', $dataInicio)
             ->whereDate('horario', '<=', $dataFim)
-            ->select(DB::raw('SUM(TIMESTAMPDIFF(HOUR, MIN(horario), MAX(horario))) as total_horas'))
+            ->select(DB::raw('
+                SUM(
+                    TIMESTAMPDIFF(
+                        HOUR,
+                        (SELECT MIN(horario) FROM registros r2 WHERE r2.user_id = registros.user_id AND DATE(r2.horario) = DATE(registros.horario)),
+                        (SELECT MAX(horario) FROM registros r3 WHERE r3.user_id = registros.user_id AND DATE(r3.horario) = DATE(registros.horario))
+                    )
+                ) as total_horas
+            '))
             ->first();
 
         // Média de permanência por aluno
-        $mediaPermanencia = DB::table('registros')
-            ->join('users', 'registros.user_id', '=', 'users.id')
-            ->where('users.tipo', 0)
-            ->whereDate('horario', '>=', $dataInicio)
-            ->whereDate('horario', '<=', $dataFim)
-            ->select(
-                'user_id',
-                DB::raw('AVG(TIMESTAMPDIFF(HOUR, MIN(horario), MAX(horario))) as media_horas')
-            )
-            ->groupBy('user_id')
-            ->avg('media_horas');
+        $mediaPermanencia = DB::table('registros as r1')
+            ->join('users', 'r1.user_id', '=', 'users.id')
+            ->where('users.tipo', 'aluno')
+            ->whereDate('r1.horario', '>=', $dataInicio)
+            ->whereDate('r1.horario', '<=', $dataFim)
+            ->select(DB::raw('
+                AVG(
+                    TIMESTAMPDIFF(
+                        HOUR,
+                        (SELECT MIN(horario) FROM registros r2 WHERE r2.user_id = r1.user_id AND DATE(r2.horario) = DATE(r1.horario)),
+                        (SELECT MAX(horario) FROM registros r3 WHERE r3.user_id = r1.user_id AND DATE(r3.horario) = DATE(r1.horario))
+                    )
+                ) as media_horas
+            '))
+            ->first()
+            ->media_horas;
 
         return response()->json([
             'status' => 'success',
