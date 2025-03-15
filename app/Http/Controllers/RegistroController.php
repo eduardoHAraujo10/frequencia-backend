@@ -479,4 +479,50 @@ class RegistroController extends Controller
 
         return $this->successResponse($alertas);
     }
+
+    /**
+     * Lista as solicitações de ajuste do aluno logado
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function listarSolicitacoesAjuste(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->tipo !== 'aluno') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acesso não autorizado. Apenas alunos podem acessar este recurso.'
+            ], 403);
+        }
+
+        try {
+            $solicitacoes = DB::table('solicitacoes_ajuste')
+                ->join('registros', 'solicitacoes_ajuste.registro_id', '=', 'registros.id')
+                ->join('users', 'solicitacoes_ajuste.user_id', '=', 'users.id')
+                ->where('solicitacoes_ajuste.user_id', $user->id)
+                ->select(
+                    'solicitacoes_ajuste.*',
+                    'registros.horario as horario_registro',
+                    'registros.tipo as tipo_registro',
+                    'users.nome as nome_aluno',
+                    'users.matricula'
+                )
+                ->orderBy('solicitacoes_ajuste.created_at', 'desc')
+                ->get();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Solicitações de ajuste listadas com sucesso',
+                'data' => $solicitacoes
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao listar solicitações de ajuste',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

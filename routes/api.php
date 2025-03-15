@@ -62,6 +62,11 @@ Route::prefix('v1')->group(function () {
         // Rotas de alerta de esquecimento
         Route::post('/registros/alerta-esquecimento', [RegistroController::class, 'criarAlertaEsquecimento']);
         Route::get('/registros/alerta-esquecimento', [RegistroController::class, 'listarAlertasEsquecimento']);
+
+        // Rotas de registro de ponto
+        Route::post('/registros/registrar-ponto', [RegistroController::class, 'registrarPonto']);
+        Route::get('/registros/horas-trabalhadas', [RegistroController::class, 'horasTrabalhadas']);
+        Route::get('/registros/solicitacoes-ajuste', [RegistroController::class, 'listarSolicitacoesAjuste']);
     });
 
     // Rotas do coordenador
@@ -69,5 +74,9 @@ Route::prefix('v1')->group(function () {
         // Alertas de esquecimento
         Route::get('/coordenador/alertas-esquecimento', [CoordenadorController::class, 'listarAlertasEsquecimento']);
         Route::post('/coordenador/alertas-esquecimento/{id}/responder', [CoordenadorController::class, 'responderAlertaEsquecimento']);
+
+        // Solicitações de ajuste
+        Route::get('/coordenador/solicitacoes-ajuste', [CoordenadorController::class, 'listarSolicitacoesAjuste']);
+        Route::post('/coordenador/solicitacoes-ajuste/{id}/responder', [CoordenadorController::class, 'responderSolicitacaoAjuste']);
     });
 });

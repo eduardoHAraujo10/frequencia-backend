@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use App\Models\AlertaEsquecimento;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class CoordenadorController extends Controller
 {
@@ -348,6 +349,123 @@ class CoordenadorController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Erro ao responder alerta de esquecimento'
+            ], 500);
+        }
+    }
+
+    /**
+     * Lista todas as solicitações de ajuste
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function listarSolicitacoesAjuste(Request $request): JsonResponse
+    {
+        // Verifica se é um coordenador
+        if ($request->user()->tipo !== 'coordenador') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acesso não autorizado. Apenas coordenadores podem acessar este recurso.'
+            ], 403);
+        }
+
+        try {
+            $solicitacoes = DB::table('solicitacoes_ajuste')
+                ->join('users as aluno', 'solicitacoes_ajuste.user_id', '=', 'aluno.id')
+                ->leftJoin('users as coordenador', 'solicitacoes_ajuste.coordenador_id', '=', 'coordenador.id')
+                ->select(
+                    'solicitacoes_ajuste.*',
+                    'aluno.nome as aluno_nome',
+                    'aluno.matricula as aluno_matricula',
+                    'coordenador.nome as coordenador_nome'
+                )
+                ->orderBy('solicitacoes_ajuste.created_at', 'desc')
+                ->paginate(10);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'solicitacoes' => $solicitacoes->items(),
+                    'total' => $solicitacoes->total(),
+                    'por_pagina' => $solicitacoes->perPage(),
+                    'pagina_atual' => $solicitacoes->currentPage(),
+                    'ultima_pagina' => $solicitacoes->lastPage()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao listar solicitações de ajuste'
+            ], 500);
+        }
+    }
+
+    /**
+     * Responde a uma solicitação de ajuste
+     *
+     * @param Request $request
+     * @param int $id
+     * @return JsonResponse
+     */
+    public function responderSolicitacaoAjuste(Request $request, $id): JsonResponse
+    {
+        // Verifica se é um coordenador
+        if ($request->user()->tipo !== 'coordenador') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acesso não autorizado. Apenas coordenadores podem acessar este recurso.'
+            ], 403);
+        }
+
+        try {
+            $request->validate([
+                'status' => 'required|in:aprovado,rejeitado',
+                'observacao_coordenador' => 'nullable|string'
+            ]);
+
+            $solicitacao = DB::table('solicitacoes_ajuste')->where('id', $id)->first();
+            
+            if (!$solicitacao) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Solicitação não encontrada'
+                ], 404);
+            }
+
+            if ($solicitacao->status !== 'pendente') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Esta solicitação já foi respondida'
+                ], 400);
+            }
+
+            // Atualiza a solicitação
+            DB::table('solicitacoes_ajuste')
+                ->where('id', $id)
+                ->update([
+                    'status' => $request->status,
+                    'observacao_coordenador' => $request->observacao_coordenador,
+                    'coordenador_id' => Auth::id(),
+                    'data_resposta' => now()
+                ]);
+
+            // Se aprovado, atualiza o registro
+            if ($request->status === 'aprovado') {
+                DB::table('registros')
+                    ->where('id', $solicitacao->registro_id)
+                    ->update([
+                        'horario' => $solicitacao->horario_solicitado
+                    ]);
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Solicitação respondida com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao responder solicitação de ajuste'
             ], 500);
         }
     }
