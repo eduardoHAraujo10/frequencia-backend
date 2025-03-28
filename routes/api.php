@@ -63,6 +63,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('/registros/{id}', [GerenciadorController::class, 'excluirRegistro']);
             Route::get('/dashboard', [DashboardController::class, 'estatisticas']);
             Route::get('/dashboard/periodo', [DashboardController::class, 'estatisticasPeriodo']);
+            Route::get('/relatorio', [GerenciadorController::class, 'relatorio']);
         });
 
         // Rotas de alerta de esquecimento

@@ -358,19 +358,19 @@ class GerenciadorController extends Controller
 
             $horasTrabalhadas = round($totalMinutos / 60, 2);
 
-            // Formata registros por dia
+            // Formata registros
             $registrosFormatados = $registros->map(function ($registrosDia) {
                 $entrada = $registrosDia->firstWhere('tipo', 'entrada');
                 $saida = $registrosDia->firstWhere('tipo', 'saida');
 
-                $horasTrabalhadas = '';
+                // Calcula total de horas do dia
+                $totalHoras = '';
                 if ($entrada && $saida) {
-                    $entradaHorario = Carbon::parse($entrada->horario)->setTimezone('America/Sao_Paulo');
-                    $saidaHorario = Carbon::parse($saida->horario)->setTimezone('America/Sao_Paulo');
-                    $minutos = $entradaHorario->diffInMinutes($saidaHorario);
+                    $minutos = Carbon::parse($entrada->horario)
+                        ->diffInMinutes(Carbon::parse($saida->horario));
                     $horas = floor($minutos / 60);
                     $minutosRestantes = $minutos % 60;
-                    $horasTrabalhadas = sprintf('%02d:%02d', $horas, $minutosRestantes);
+                    $totalHoras = sprintf('%02d:%02d', $horas, $minutosRestantes);
                 }
 
                 $primeiroRegistro = Carbon::parse($registrosDia->first()->horario)->setTimezone('America/Sao_Paulo');
@@ -380,7 +380,7 @@ class GerenciadorController extends Controller
                     'dia_semana' => $primeiroRegistro->locale('pt_BR')->isoFormat('dddd'),
                     'entrada' => $entrada ? Carbon::parse($entrada->horario)->setTimezone('America/Sao_Paulo')->format('H:i:s') : null,
                     'saida' => $saida ? Carbon::parse($saida->horario)->setTimezone('America/Sao_Paulo')->format('H:i:s') : null,
-                    'horas_trabalhadas' => $horasTrabalhadas
+                    'total_horas' => $totalHoras
                 ];
             })->values();
 
@@ -755,6 +755,182 @@ class GerenciadorController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Erro ao adicionar registro',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Retorna um relatório geral com estatísticas de todos os alunos
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+    public function relatorio(Request $request): JsonResponse
+    {
+        // Verifica se é um gerenciador
+        if ($request->user()->tipo !== 'coordenador') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acesso não autorizado'
+            ], 403);
+        }
+
+        try {
+            // Período padrão: mês atual
+            $dataInicio = $request->input('data_inicio', Carbon::now()->startOfMonth()->format('Y-m-d'));
+            $dataFim = $request->input('data_fim', Carbon::now()->format('Y-m-d'));
+            $nomeAluno = $request->input('nome');
+            $matricula = $request->input('matricula');
+            $status = $request->input('status'); // todos, presente, ausente, justificado
+
+            // Busca todos os alunos ativos com filtros
+            $query = User::where('tipo', 'aluno')
+                ->where('ativo', true);
+
+            if ($nomeAluno) {
+                $query->where('nome', 'like', "%{$nomeAluno}%");
+            }
+
+            if ($matricula) {
+                $query->where('matricula', 'like', "%{$matricula}%");
+            }
+
+            $alunos = $query->get();
+
+            $totalAlunos = $alunos->count();
+            $totalPresentes = 0;
+            $totalHoras = 0;
+            $alunosRelatorio = [];
+            $todosRegistros = [];
+
+            foreach ($alunos as $aluno) {
+                // Busca registros do período
+                $registros = Registro::where('user_id', $aluno->id)
+                    ->whereBetween('horario', [$dataInicio . ' 00:00:00', $dataFim . ' 23:59:59'])
+                    ->orderBy('horario', 'desc')
+                    ->get();
+
+                if ($registros->count() > 0) {
+                    $totalPresentes++;
+                }
+
+                // Adiciona cada registro à lista completa
+                foreach ($registros as $registro) {
+                    $horario = Carbon::parse($registro->horario)->setTimezone('America/Sao_Paulo');
+                    $todosRegistros[] = [
+                        'data' => $horario->format('d/m/Y'),
+                        'hora' => $horario->format('H:i:s'),
+                        'nome' => $aluno->nome,
+                        'matricula' => $aluno->matricula,
+                        'tipo' => ucfirst($registro->tipo)
+                    ];
+                }
+
+                // Calcula total de horas
+                $horasTrabalhadas = 0;
+                $registrosPorDia = $registros->groupBy(function ($registro) {
+                    return Carbon::parse($registro->horario)->format('Y-m-d');
+                });
+
+                // Formata registros por dia com entrada, saída e total de horas
+                $registrosDiarios = [];
+                foreach ($registrosPorDia as $data => $registrosDia) {
+                    $entrada = $registrosDia->firstWhere('tipo', 'entrada');
+                    $saida = $registrosDia->firstWhere('tipo', 'saida');
+                    
+                    // Calcula total de horas do dia
+                    $totalHorasDia = '';
+                    if ($entrada && $saida) {
+                        $minutos = Carbon::parse($entrada->horario)
+                            ->diffInMinutes(Carbon::parse($saida->horario));
+                        $horas = floor($minutos / 60);
+                        $minutosRestantes = $minutos % 60;
+                        $totalHorasDia = sprintf('%02d:%02d', $horas, $minutosRestantes);
+                        $horasTrabalhadas += $minutos / 60;
+                    }
+
+                    $registrosDiarios[] = [
+                        'data' => Carbon::parse($data)->format('d/m/Y'),
+                        'entrada' => $entrada ? Carbon::parse($entrada->horario)->format('H:i') : null,
+                        'saida' => $saida ? Carbon::parse($saida->horario)->format('H:i') : null,
+                        'total_horas' => $totalHorasDia
+                    ];
+                }
+
+                $totalHoras += $horasTrabalhadas;
+
+                // Encontra primeiro e último registro
+                $primeiroRegistro = $registros->last() ? Carbon::parse($registros->last()->horario)->format('d/m/Y') : null;
+                $ultimoRegistro = $registros->first() ? Carbon::parse($registros->first()->horario)->format('d/m/Y') : null;
+                $horarioUltimoRegistro = $registros->first() ? Carbon::parse($registros->first()->horario)->format('H:i') : null;
+
+                // Calcula estatísticas
+                $totalDias = Carbon::parse($dataInicio)->diffInDays(Carbon::parse($dataFim)) + 1;
+                $diasPresenca = $registrosPorDia->count();
+                $diasAusencia = $totalDias - $diasPresenca;
+                $porcentagemPresenca = round(($diasPresenca / $totalDias) * 100, 2);
+
+                // Define o status do aluno
+                $statusAluno = 'ausente';
+                if ($diasPresenca > 0) {
+                    $statusAluno = 'presente';
+                }
+
+                // Filtra por status se especificado
+                if ($status && $status !== 'todos' && $status !== $statusAluno) {
+                    continue;
+                }
+
+                $alunosRelatorio[] = [
+                    'id' => $aluno->id,
+                    'nome' => $aluno->nome,
+                    'matricula' => $aluno->matricula,
+                    'ativo' => $aluno->ativo,
+                    'status' => $statusAluno,
+                    'primeiro_registro' => $primeiroRegistro,
+                    'ultimo_registro' => $ultimoRegistro,
+                    'horario_ultimo_registro' => $horarioUltimoRegistro,
+                    'estatisticas' => [
+                        'dias_presenca' => $diasPresenca,
+                        'dias_ausencia' => $diasAusencia,
+                        'porcentagem_presenca' => $porcentagemPresenca,
+                        'total_horas_trabalhadas' => round($horasTrabalhadas, 2)
+                    ],
+                    'registros_diarios' => $registrosDiarios
+                ];
+            }
+
+            // Ordena todos os registros por data e hora (mais recente primeiro)
+            usort($todosRegistros, function($a, $b) {
+                $dateA = Carbon::createFromFormat('d/m/Y H:i:s', $a['data'] . ' ' . $a['hora']);
+                $dateB = Carbon::createFromFormat('d/m/Y H:i:s', $b['data'] . ' ' . $b['hora']);
+                return $dateB->timestamp - $dateA->timestamp;
+            });
+
+            $mediaPresenca = $totalAlunos > 0 ? round(($totalPresentes / $totalAlunos) * 100, 2) : 0;
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'periodo' => [
+                        'inicio' => Carbon::parse($dataInicio)->format('d/m/Y'),
+                        'fim' => Carbon::parse($dataFim)->format('d/m/Y')
+                    ],
+                    'resumo' => [
+                        'total_alunos' => $totalAlunos,
+                        'presentes' => $totalPresentes,
+                        'media_presenca' => $mediaPresenca,
+                        'total_horas' => $totalHoras
+                    ],
+                    'alunos' => $alunosRelatorio,
+                    'registros' => $todosRegistros
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao gerar relatório',
                 'error' => $e->getMessage()
             ], 500);
         }
