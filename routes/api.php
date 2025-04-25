@@ -7,6 +7,7 @@ use App\Http\Controllers\GerenciadorController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\CoordenadorController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\MatriculaController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -48,6 +49,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/registros/ajuste', [RegistroController::class, 'solicitarAjuste']);
         Route::put('/registros/{id}', [GerenciadorController::class, 'editarRegistro']);
         Route::delete('/registros/{id}', [GerenciadorController::class, 'excluirRegistro']);
+        Route::put('/alunos/{id}/matricula', [GerenciadorController::class, 'editarMatricula']);
 
         // Gerenciador
         Route::prefix('gerenciador')->group(function () {

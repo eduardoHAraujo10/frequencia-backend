@@ -334,21 +334,61 @@ class CoordenadorController extends Controller
                 ], 400);
             }
 
-            $alerta->status = $request->status;
-            $alerta->observacao_coordenador = $request->observacao_coordenador;
-            $alerta->coordenador_id = Auth::id();
-            $alerta->data_aprovacao = now();
-            $alerta->save();
+            DB::beginTransaction();
+            try {
+                // Atualiza o alerta
+                $alerta->status = $request->status;
+                $alerta->observacao_coordenador = $request->observacao_coordenador;
+                $alerta->coordenador_id = Auth::id();
+                $alerta->data_aprovacao = now();
+                $alerta->save();
 
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Alerta respondido com sucesso',
-                'data' => $alerta
-            ]);
+                // Se o alerta foi aprovado, cria os registros necessários
+                if ($request->status === 'aprovado') {
+                    // Cria registro de entrada
+                    $data = Carbon::parse($alerta->data)->format('Y-m-d');
+                    
+                    // Configura o fuso horário para America/Sao_Paulo
+                    $horaEntrada = Carbon::parse($alerta->horario_entrada)
+                        ->setTimezone('America/Sao_Paulo')
+                        ->format('H:i:s');
+                    
+                    $registroEntrada = new Registro();
+                    $registroEntrada->user_id = $alerta->user_id;
+                    $registroEntrada->tipo = 'entrada';
+                    $registroEntrada->horario = Carbon::createFromFormat('Y-m-d H:i:s', $data . ' ' . $horaEntrada, 'America/Sao_Paulo');
+                    $registroEntrada->save();
+
+                    // Se tiver horário de saída, cria registro de saída também
+                    if ($alerta->horario_saida) {
+                        $horaSaida = Carbon::parse($alerta->horario_saida)
+                            ->setTimezone('America/Sao_Paulo')
+                            ->format('H:i:s');
+                        
+                        $registroSaida = new Registro();
+                        $registroSaida->user_id = $alerta->user_id;
+                        $registroSaida->tipo = 'saida';
+                        $registroSaida->horario = Carbon::createFromFormat('Y-m-d H:i:s', $data . ' ' . $horaSaida, 'America/Sao_Paulo');
+                        $registroSaida->save();
+                    }
+                }
+
+                DB::commit();
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Alerta respondido com sucesso',
+                    'data' => $alerta
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                throw $e;
+            }
         } catch (\Exception $e) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Erro ao responder alerta de esquecimento'
+                'message' => 'Erro ao responder alerta de esquecimento',
+                'error' => $e->getMessage()
             ], 500);
         }
     }

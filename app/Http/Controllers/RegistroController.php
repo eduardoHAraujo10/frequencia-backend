@@ -10,6 +10,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Auth;
 
 class RegistroController extends Controller
 {
@@ -247,13 +249,16 @@ class RegistroController extends Controller
 
         $resumos = $query->get();
 
-        // Calcular porcentagem de presença e formatar horário
+        // Calcular porcentagem de presença e ajustar fuso horário
         $totalDias = Carbon::parse($dataInicio)->diffInDays(Carbon::parse($dataFim)) + 1;
-        foreach ($resumos as &$resumo) {
+        foreach ($resumos as $resumo) {
             $resumo->porcentagem_presenca = round(($resumo->dias_presenca / $totalDias) * 100, 2);
+            
             if ($resumo->ultimo_registro_horario) {
-                $horario = Carbon::parse($resumo->ultimo_registro_horario)->setTimezone('America/Sao_Paulo');
-                $resumo->ultimo_registro_horario = $horario->format('H:i:s');
+                $horario = Carbon::parse($resumo->ultimo_registro_horario)
+                    ->shiftTimezone('America/Sao_Paulo')
+                    ->format('H:i:s');
+                $resumo->ultimo_registro_horario = $horario;
             }
         }
 
@@ -383,80 +388,72 @@ class RegistroController extends Controller
      * @param Request $request
      * @return JsonResponse
      */
-    public function criarAlertaEsquecimento(Request $request): JsonResponse
+    public function criarAlertaEsquecimento(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'data' => [
-                'required',
-                'date',
-                'after_or_equal:' . now()->subDays(7)->format('Y-m-d'),
-                'before_or_equal:' . now()->addDays(1)->format('Y-m-d'),
-            ],
-            'horario_previsto' => [
-                'required',
-                'date_format:H:i',
-                function ($attribute, $value, $fail) use ($request) {
-                    if (!$request->data) return;
-                    
-                    $dataHora = Carbon::createFromFormat('Y-m-d H:i', $request->data . ' ' . $value);
-                    
-                    if ($dataHora->isFuture() && $dataHora->diffInDays(now()) > 1) {
-                        $fail('O horário não pode ser mais de 1 dia no futuro.');
+        try {
+            $request->validate([
+                'data' => 'required|date',
+                'horario_entrada' => [
+                    'required',
+                    'date_format:H:i',
+                    function ($attribute, $value, $fail) use ($request) {
+                        $dataHoraEntrada = Carbon::parse($request->data . ' ' . $value);
+                        if ($dataHoraEntrada->isFuture()) {
+                            $fail('O horário de entrada não pode ser no futuro.');
+                        }
                     }
-                    
-                    if ($dataHora->isPast() && $dataHora->diffInDays(now()) > 7) {
-                        $fail('O horário não pode ser mais de 7 dias no passado.');
+                ],
+                'horario_saida' => [
+                    'nullable',
+                    'date_format:H:i',
+                    function ($attribute, $value, $fail) use ($request) {
+                        if ($value) {
+                            $horaEntrada = Carbon::createFromFormat('H:i', $request->horario_entrada);
+                            $horaSaida = Carbon::createFromFormat('H:i', $value);
+                            
+                            if ($horaSaida->isBefore($horaEntrada)) {
+                                $fail('O horário de saída deve ser posterior ao horário de entrada.');
+                            }
+                        }
                     }
-                }
-            ],
-            'tipo' => 'required|in:entrada,saida',
-            'justificativa' => 'required|string|min:10'
-        ], [
-            'data.required' => 'A data é obrigatória',
-            'data.date' => 'A data deve ser válida',
-            'data.after_or_equal' => 'A data não pode ser mais de 7 dias no passado',
-            'data.before_or_equal' => 'A data não pode ser mais de 1 dia no futuro',
-            'horario_previsto.required' => 'O horário é obrigatório',
-            'horario_previsto.date_format' => 'O horário deve estar no formato HH:mm',
-            'tipo.required' => 'O tipo é obrigatório',
-            'tipo.in' => 'O tipo deve ser entrada ou saída',
-            'justificativa.required' => 'A justificativa é obrigatória',
-            'justificativa.min' => 'A justificativa deve ter pelo menos 10 caracteres'
-        ]);
+                ],
+                'justificativa' => 'required|string|min:10'
+            ]);
 
-        if ($validator->fails()) {
+            // Verifica se já existe um alerta pendente ou aprovado para o mesmo dia
+            $alertaExistente = AlertaEsquecimento::where('user_id', Auth::id())
+                ->where('data', $request->data)
+                ->whereIn('status', ['pendente', 'aprovado'])
+                ->first();
+
+            if ($alertaExistente) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Já existe um alerta de esquecimento para esta data'
+                ], 400);
+            }
+
+            $alerta = new AlertaEsquecimento();
+            $alerta->user_id = Auth::id();
+            $alerta->data = $request->data;
+            $alerta->horario_entrada = $request->horario_entrada;
+            $alerta->horario_saida = $request->horario_saida;
+            $alerta->justificativa = $request->justificativa;
+            $alerta->status = 'pendente';
+            $alerta->save();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Alerta de esquecimento criado com sucesso',
+                'data' => $alerta
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Erro de validação',
-                'errors' => $validator->errors()->toArray()
-            ], 422);
+                'message' => 'Erro ao criar alerta de esquecimento',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        $user = $request->user();
-
-        if ($user->tipo !== 'aluno') {
-            return $this->unauthorizedResponse('Apenas alunos podem criar alertas de esquecimento');
-        }
-
-        // Verifica se já existe alerta para o mesmo dia e tipo
-        $alertaExistente = AlertaEsquecimento::where('user_id', $user->id)
-            ->where('data', $request->data)
-            ->where('tipo', $request->tipo)
-            ->exists();
-
-        if ($alertaExistente) {
-            return $this->errorResponse('Já existe um alerta para esta data e tipo de registro');
-        }
-
-        $alerta = new AlertaEsquecimento();
-        $alerta->user_id = $user->id;
-        $alerta->data = $request->data;
-        $alerta->horario_previsto = Carbon::parse($request->data . ' ' . $request->horario_previsto);
-        $alerta->tipo = $request->tipo;
-        $alerta->justificativa = $request->justificativa;
-        $alerta->save();
-
-        return $this->successResponse($alerta, 'Alerta de esquecimento criado com sucesso');
     }
 
     /**
@@ -467,17 +464,55 @@ class RegistroController extends Controller
      */
     public function listarAlertasEsquecimento(Request $request): JsonResponse
     {
-        $user = $request->user();
+        try {
+            $user = $request->user();
 
-        if ($user->tipo !== 'aluno') {
-            return $this->unauthorizedResponse('Acesso não autorizado');
+            if ($user->tipo !== 'aluno') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Acesso não autorizado'
+                ], 403);
+            }
+
+            $query = AlertaEsquecimento::with(['coordenador:id,nome'])
+                ->where('user_id', $user->id);
+
+            // Filtros opcionais
+            if ($request->has('status')) {
+                $query->where('status', $request->status);
+            }
+
+            if ($request->has('data_inicio')) {
+                $query->whereDate('data', '>=', $request->data_inicio);
+            }
+
+            if ($request->has('data_fim')) {
+                $query->whereDate('data', '<=', $request->data_fim);
+            }
+
+            $alertas = $query->orderBy('created_at', 'desc')
+                ->paginate($request->per_page ?? 10);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Alertas listados com sucesso',
+                'data' => [
+                    'alertas' => $alertas->items(),
+                    'paginacao' => [
+                        'total' => $alertas->total(),
+                        'por_pagina' => $alertas->perPage(),
+                        'pagina_atual' => $alertas->currentPage(),
+                        'ultima_pagina' => $alertas->lastPage()
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao listar alertas de esquecimento',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        $alertas = AlertaEsquecimento::where('user_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        return $this->successResponse($alertas);
     }
 
     /**

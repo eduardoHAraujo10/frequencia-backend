@@ -335,7 +335,9 @@ class GerenciadorController extends Controller
                 ->orderBy('horario', 'desc')
                 ->get()
                 ->groupBy(function ($registro) {
-                    return Carbon::parse($registro->horario)->format('Y-m-d');
+                    return Carbon::parse($registro->horario)
+                        ->shiftTimezone('America/Sao_Paulo')
+                        ->format('Y-m-d');
                 });
 
             // Calcula estatísticas
@@ -351,8 +353,9 @@ class GerenciadorController extends Controller
                 $saida = $registrosDia->firstWhere('tipo', 'saida');
 
                 if ($entrada && $saida) {
-                    $totalMinutos += Carbon::parse($entrada->horario)
-                        ->diffInMinutes(Carbon::parse($saida->horario));
+                    $horaEntrada = Carbon::parse($entrada->horario)->shiftTimezone('America/Sao_Paulo');
+                    $horaSaida = Carbon::parse($saida->horario)->shiftTimezone('America/Sao_Paulo');
+                    $totalMinutos += $horaEntrada->diffInMinutes($horaSaida);
                 }
             }
 
@@ -366,20 +369,22 @@ class GerenciadorController extends Controller
                 // Calcula total de horas do dia
                 $totalHoras = '';
                 if ($entrada && $saida) {
-                    $minutos = Carbon::parse($entrada->horario)
-                        ->diffInMinutes(Carbon::parse($saida->horario));
+                    $horaEntrada = Carbon::parse($entrada->horario)->shiftTimezone('America/Sao_Paulo');
+                    $horaSaida = Carbon::parse($saida->horario)->shiftTimezone('America/Sao_Paulo');
+                    $minutos = $horaEntrada->diffInMinutes($horaSaida);
                     $horas = floor($minutos / 60);
                     $minutosRestantes = $minutos % 60;
                     $totalHoras = sprintf('%02d:%02d', $horas, $minutosRestantes);
                 }
 
-                $primeiroRegistro = Carbon::parse($registrosDia->first()->horario)->setTimezone('America/Sao_Paulo');
+                $primeiroRegistro = Carbon::parse($registrosDia->first()->horario)
+                    ->shiftTimezone('America/Sao_Paulo');
 
                 return [
                     'data' => $primeiroRegistro->format('Y-m-d'),
                     'dia_semana' => $primeiroRegistro->locale('pt_BR')->isoFormat('dddd'),
-                    'entrada' => $entrada ? Carbon::parse($entrada->horario)->setTimezone('America/Sao_Paulo')->format('H:i:s') : null,
-                    'saida' => $saida ? Carbon::parse($saida->horario)->setTimezone('America/Sao_Paulo')->format('H:i:s') : null,
+                    'entrada' => $entrada ? Carbon::parse($entrada->horario)->shiftTimezone('America/Sao_Paulo')->format('H:i:s') : null,
+                    'saida' => $saida ? Carbon::parse($saida->horario)->shiftTimezone('America/Sao_Paulo')->format('H:i:s') : null,
                     'total_horas' => $totalHoras
                 ];
             })->values();
@@ -931,6 +936,73 @@ class GerenciadorController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Erro ao gerar relatório',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Edita a matrícula de um aluno
+     *
+     * @param Request $request
+     * @param int $id
+     * @return JsonResponse
+     */
+    public function editarMatricula(Request $request, int $id): JsonResponse
+    {
+        // Verifica se é um coordenador
+        if ($request->user()->tipo !== 'coordenador') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acesso não autorizado'
+            ], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'matricula' => 'required|string|max:255|unique:users,matricula,' . $id
+        ], [
+            'matricula.required' => 'A matrícula é obrigatória',
+            'matricula.unique' => 'Esta matrícula já está em uso por outro aluno'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro de validação',
+                'errors' => $validator->errors()->toArray()
+            ], 422);
+        }
+
+        try {
+            $aluno = User::where('id', $id)
+                ->where('tipo', 'aluno')
+                ->first();
+
+            if (!$aluno) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Aluno não encontrado'
+                ], 404);
+            }
+
+            $aluno->matricula = $request->matricula;
+            $aluno->save();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Matrícula atualizada com sucesso',
+                'data' => [
+                    'aluno' => [
+                        'id' => $aluno->id,
+                        'nome' => $aluno->nome,
+                        'matricula' => $aluno->matricula
+                    ]
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Erro ao atualizar matrícula',
                 'error' => $e->getMessage()
             ], 500);
         }
