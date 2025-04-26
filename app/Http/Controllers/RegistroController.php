@@ -72,7 +72,7 @@ class RegistroController extends Controller
         $registro = new Registro();
         $registro->user_id = $user->id;
         $registro->tipo = $request->tipo;
-        $registro->horario = now();
+        $registro->horario = Carbon::now()->setTimezone('America/Sao_Paulo');
         $registro->save();
 
         return $this->successResponse($registro, 'Ponto registrado com sucesso');
