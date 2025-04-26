@@ -112,6 +112,7 @@
         <thead>
             <tr>
                 <th>Data</th>
+                <th>Nome do Aluno</th>
                 <th>Entrada</th>
                 <th>Saída</th>
                 <th>Total de Horas</th>
@@ -121,6 +122,7 @@
             @foreach($registros_diarios as $registro)
             <tr>
                 <td>{{ $registro['data'] }}</td>
+                <td>{{ $registro['nome_aluno'] }}</td>
                 <td>{{ $registro['entrada'] }}</td>
                 <td>{{ $registro['saida'] }}</td>
                 <td>{{ $registro['total_horas'] }}</td>
@@ -131,6 +133,10 @@
 
     <div class="footer">
         Gerado em {{ now()->setTimezone('America/Sao_Paulo')->format('d/m/Y H:i:s') }}
+        @if(isset($user))
+        <br>
+        Registro realizado por: {{ $user->nome }}
+        @endif
     </div>
 </body>
 </html>

@@ -70,7 +70,8 @@ class RegistrosPdfExport
                     'data' => Carbon::parse($data)->format('d/m/Y'),
                     'entrada' => $entrada ? Carbon::parse($entrada->horario)->format('H:i:s') : '-',
                     'saida' => $saida ? Carbon::parse($saida->horario)->format('H:i:s') : '-',
-                    'total_horas' => $totalHoras
+                    'total_horas' => $totalHoras,
+                    'nome_aluno' => $aluno->nome
                 ];
             }
 
@@ -108,7 +109,8 @@ class RegistrosPdfExport
             'periodo' => [
                 'inicio' => $this->dataInicio->format('d/m/Y'),
                 'fim' => $this->dataFim->format('d/m/Y')
-            ]
+            ],
+            'user' => auth()->user()
         ]);
 
         return $pdf->download('relatorio_' . $this->dataInicio->format('Y-m-d') . '_a_' . $this->dataFim->format('Y-m-d') . '.pdf');
